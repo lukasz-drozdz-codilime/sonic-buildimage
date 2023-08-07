@@ -47,7 +47,8 @@ make_target_devenv() {
 	fi
 	test "$some_cpp_file"
 	cp "$some_cpp_file" "$some_cpp_file.${tag}.bck"
-	trap "mv $some_cpp_file.${tag}.bck $some_cpp_file" EXIT
+
+	trap "cp $some_cpp_file.${tag}.bck $some_cpp_file ; rm $some_cpp_file.${tag}.bck" EXIT
 	echo "some jibberrish non-c++ code" >> "$some_cpp_file"
 
 	echo --- start sonic builder slave container
