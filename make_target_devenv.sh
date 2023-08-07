@@ -6,9 +6,12 @@ set -x
 
 make_target_devenv() {
 	readonly target="$1"
+	readonly target_source_dir="$(realpath "$2")"
+
+	readonly parent_workdir="$(pwd)"
 
 	# example: target/debs/bullseye/swss_1.0.0_amd64.deb -> swss
-	readonly service="$(echo $target | egrep -o "[^/]+\.deb$" | egrep -o "[a-zA-Z]+" | head -n 1)"
+	readonly service="$(echo "$target" | egrep -o "[^/]+\.deb$" | egrep -o "[a-zA-Z]+" | head -n 1)"
 
 	readonly sonic_opts="NOSTRETCH=1 NOBUSTER=1 BLDENV=bullseye"
 	readonly tag="$RANDOM"
@@ -29,19 +32,37 @@ make_target_devenv() {
 	# workaround: make sure no containers are running
 	(
 		readonly running_containers="$(docker ps --format json)"
-		test "$running_containers" && (echo stop all docker containers for this script to work, please... && exit 1) || true
+		if [ "$running_containers" ]  ; then
+			echo stop all docker containers for this script to work, please...
+			fail
+		fi
 	)
 
+	echo --- "intentionally break the $target build in $target_source_dir"
+	# find some main file and break it
+	local some_cpp_file="$(find "$target_source_dir" -type f | grep "/main\.cpp" | head -n 1)"
+	if [ -z "$some_cpp_file" ]; then
+		# any cpp file
+		some_cpp_file="$(find "$target_source_dir" -type f | grep "\.cpp" | head -n 1)"
+	fi
+	test "$some_cpp_file"
+	cp "$some_cpp_file" "$some_cpp_file.${tag}.bck"
+	trap "mv $some_cpp_file.${tag}.bck $some_cpp_file" EXIT
+	echo "some jibberrish non-c++ code" >> "$some_cpp_file"
+
 	echo --- start sonic builder slave container
-	readonly build_log="log-build-${tag}.txt"
+	readonly build_log="${parent_workdir}/log-build-${tag}.txt"
 	rm "$target" || true
 	( make $sonic_opts KEEP_SLAVE_ON=yes "$target" < "$tmp_command_file" > "$build_log" 2>&1 ) &
 	trap "touch $sonic_image_stored_latch_file" EXIT
 
-	until [ -f "$sonic_image_open_latch_file" ]; do sleep 5s && echo waiting for $service container to be ready... ; done
+	until [ -f "$sonic_image_open_latch_file" ]; do
+		sleep 5s
+		echo waiting for $service container to be ready...
+	done
 
-	echo --- make sure the sonic build went without errors
-	egrep "exit [1-9]" "$build_log" && echo "found errors in sonic build, check $build_log for details" && exit 1 || true
+#	echo --- make sure the sonic build went without errors
+#	egrep "exit [1-9]" "$build_log" && echo "found errors in sonic build, check $build_log for details" && exit 1 || true
 
 	echo --- store the sonic builder slave container
 	readonly container_name="$(docker ps -n 1 --format "{{ .Names }}")"
@@ -64,6 +85,7 @@ make_target_devenv() {
 			openssh-server \
 			ccache
 	RUN echo '${USER}:${USER}' | chpasswd
+	RUN echo 'root:root' | chpasswd
 
 	WORKDIR /workdir
 	RUN service ssh start
